@@ -7,6 +7,7 @@
 
 .data
 
+isKeyboardInterruptionActive        db 1
 ProgrammStartString                 db  "Programm has started...", 10, "$"  ; 10 = new line char code
 OutInterruptionFuncMesage           db  "I am custom interruption function", 10, "$"
 VIDEO_MEMORY_ADDR                   equ 0b800h
@@ -16,6 +17,7 @@ KEYBOARD_PORT                       equ 60h
 ESC_ASCII_CODE                      equ 1
 INTERRUPTION_CONTROLLER_PORT        equ 20h
 END_OF_INTERRUPT_CODE               equ 20h ; = EOI
+ACTIVATION_CODE                     equ 59
 
 .code
 org 100h
@@ -28,7 +30,16 @@ Start:
     xor ax, ax ; ax = 0
     mov es, ax ; ???
     mov bx, 09h * 4
-    cli     ; processor stops  considering interruptions
+
+
+    cli
+    mov ax, es:[bx]
+    mov OldInterruptionFuncOffset, ax       ; save offset of old interruption receiver
+    mov ax, es:[bx + 2]
+    mov OldInterruptionFuncCodeSegment, ax  ; save code segment of old interruption receiver
+;     sti
+;
+;     cli     ; processor stops  considering interruptions
             ; (we don' want any interruptions to happen while we chantge table of interruptions)
     ; save to the table of interrutions, offset of our function in current code segment
     mov es:[bx], offset drawScanCodeOfPressedKey    ; set offset to low bits
@@ -50,7 +61,7 @@ Start:
     ; int 21h
 
 drawScanCodeOfPressedKey        proc
-    push ax di es dx
+    push ax di es
 
     ; mov ah, 09h
     ; mov dx, offset OutInterruptionFuncMesage
@@ -63,7 +74,35 @@ drawScanCodeOfPressedKey        proc
     cld
 
     in al, KEYBOARD_PORT
+
+
+    cmp al, ACTIVATION_CODE
+    jne notActivationCode
+        xor cs:isKeyboardInterruptionActive, 1h
+        jmp bibaIboba
+    notActivationCode:
+
+    cmp cs:isKeyboardInterruptionActive, 1h
+    je doBruhMoment
+        ; in  al,  61h
+        ; mov ah,  al  ; save previous val
+        ; or  al,  80h ; set highest bit
+        ; out 61h, al
+        ; mov al,  ah  ; restore previous val
+        ; out 61h, al
+
+        mov al, END_OF_INTERRUPT_CODE
+        out INTERRUPTION_CONTROLLER_PORT, al
+
+        pop es di ax
+        jmp OldInterruptionsReceiver
+    doBruhMoment:
+    bibaIboba:
+
+
+
     stosw
+
     in  al,  61h
     mov ah,  al  ; save previous val
     or  al,  80h ; set highest bit
@@ -74,11 +113,33 @@ drawScanCodeOfPressedKey        proc
     mov al, END_OF_INTERRUPT_CODE
     out INTERRUPTION_CONTROLLER_PORT, al
 
-    pop dx es di ax
+    pop es di ax
 
     iret         ; special return for interruptions, stores not only registers,
                  ; but also flags and command segments
     endp
+
+
+; openWindow:
+;     ACTIVATION_CODE
+;
+;     iret
+;     endp
+
+
+
+
+jmp endOfBruh
+
+; far jump
+OldInterruptionsReceiver:
+    db 0eah
+; code of our program changes, while program is running,
+; that's not security safe, so modern systems forbid to do so
+OldInterruptionFuncOffset      dw 0
+OldInterruptionFuncCodeSegment dw 0
+
+endOfBruh:
 
 EndOfProgram:
 
