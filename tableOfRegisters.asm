@@ -9,14 +9,13 @@
 
 ; -------------------------         VARIABLES       ----------------------------------------
 
-isKeyboardInterruptionActive        db 1
-ProgrammStartString                 db "Programm has started...", 10, "$"  ; 10 = new line char code
-OutInterruptionFuncMesage           db "I am custom interruption function", 10, "$"
-OldKeyboardInterruptorFuncAddr      label dword
-; code of our program changes, while program is running,
-; that's not security safe, so modern systems forbid to do so
-OldInterruptionFuncOffset           dw 0
-OldInterruptionFuncCodeSegment      dw 0
+isKeyboardInterruptionActive                db 1
+ProgrammStartString                         db "Programm has started...", 10, "$"  ; 10 = new line char code
+OutInterruptionFuncMesage                   db "I am custom interruption function", 10, "$"
+; OldTimerInterruptorFuncAddr                 label dword
+; OldTimerInterrupFuncOffset                  dw 0
+; OldTimerInterrupFuncCodeSegment             dw 0
+
 
 ; -------------------------         CONSTS          ----------------------------------------
 
@@ -45,9 +44,9 @@ Start:
 
 
     mov ax, es:[bx]
-    mov OldInterruptionFuncOffset, ax       ; save offset of old interruption receiver
+    mov OldKeyboardInterrupFuncOffset, ax       ; save offset of old interruption receiver
     mov ax, es:[bx + 2]
-    mov OldInterruptionFuncCodeSegment, ax  ; save code segment of old interruption receiver
+    mov OldKeyboardInterrupFuncCodeSegment, ax  ; save code segment of old interruption receiver
 ;     sti
 ;
 
@@ -132,7 +131,7 @@ drawScanCodeOfPressedKey        proc
         out INTERRUPTION_CONTROLLER_PORT, al
 
         pop es di ax
-        jmp cs:OldKeyboardInterruptorFuncAddr
+        jmp OldKeyboardInterrupFuncAddr
     doBruhMoment:
     bibaIboba:
 
@@ -172,18 +171,14 @@ drawScanCodeOfPressedKey        proc
 
 
 
-; ASK: how to properly implement jump to old resident?
-; jmp endOfBruh
-;
 ; ; far jump
-; OldInterruptionsReceiver:
-;     db 0eah
+OldKeyboardInterrupFuncAddr:
+    db 0eah
 ; code of our program changes, while program is running,
 ; that's not security safe, so modern systems forbid to do so
-; OldInterruptionFuncOffset      dw 0
-; OldInterruptionFuncCodeSegment dw 0
-;
-; endOfBruh:
+OldKeyboardInterrupFuncOffset      dw 0
+OldKeyboardInterrupFuncCodeSegment dw 0
+
 
 EndOfProgram:
 
