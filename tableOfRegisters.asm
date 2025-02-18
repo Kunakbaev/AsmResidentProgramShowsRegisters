@@ -3,7 +3,9 @@
 ; -----------------------------------------------
 ;                       DATA
 ; -----------------------------------------------
+.code
 
+varsStart:
 
 .data
 
@@ -11,7 +13,24 @@
 
 isTableOfRegistersOpen                      db 1
 ProgrammStartString                         db "Programm has started...", 10, "$"  ; 10 = new line char code
-OutInterruptionFuncMesage                   db "I am custom interruption function", 10, "$"
+
+; frame submodule variables
+
+; contains all possible formats for frame
+; FIXME: to hex
+FrameStyles                 db 201, 205, 187, 186, 32, 186, 200, 205, 188 ; double edge
+                            db 218, 196, 191, 179, 32, 179, 192, 196, 217 ; single edge
+                            db '123456789'                                ; for debug purposes
+                            db '#-#| |#-#'
+CurrentFrameStyle           db '#-#| |#-#'
+TextMessage                 db "I am so stupid and dumb. That's why I love a dump." ; message that is shown in the middle of table
+backgroundColor             db 1 dup(?)                                             ; Is it ok to store just one byte in memory?
+; ASK: cringe?
+AxRegTableName              db "AX:"
+BxRegTableName              db "BX:"
+CxRegTableName              db "CX:"
+DxRegTableName              db "DX:"
+
 
 
 ; -------------------------         CONSTS          ----------------------------------------
@@ -25,18 +44,66 @@ INTERRUPTION_CONTROLLER_PORT                equ 20h
 END_OF_INTERRUPT_CODE                       equ 20h ; = EOI
 ACTIVATION_CODE                             equ 59
 REGISTER_HEX_LEN                            equ 4
-TERMINANTE_AND_STAY_RESIDENT_FUNC_CODE      equ 3100h
+TERMINATE_AND_STAY_RESIDENT_FUNC_CODE       equ 3100h
 JMP_COMMAND_CODE                            equ 0eah
 TIMER_INT_CODE                              equ 08h
 KEYBOARD_INT_CODE                           equ 09h
 
+; frame submodule consts
+COMMAND_LINE_MEMORY_ADDR                    equ 80h
+TEXT_MESSAGE_COLOR_ATTR                     equ 3Fh
+SCREEN_WIDTH                                equ 80
+STYLE_STRING_LEN                            equ 9
+STYLE_STRING_ONE_ROW_LEN                    equ 3
+FRAME_WIDTH                                 equ 20
+FRAME_HEIGHT                                equ 10
+
+
 .code
 org 100h
+
+varsEnd:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+; ---------------------------------         MAIN PROGRAM        ---------------------------------------
 
 Start:
     mov ah, 09h
     mov dx, offset ProgrammStartString
     int 21h
+
 
 
     cli     ; processor stops  considering interruptions
@@ -45,17 +112,184 @@ Start:
     call loadMyTimerInterruptorAndSavePrev
     sti     ; processor starts considering interruptions
 
-
-
     ; finish program, but it stay's as a resident in memory and continues to work
-    mov ax, TERMINANTE_AND_STAY_RESIDENT_FUNC_CODE
+    mov ax, TERMINATE_AND_STAY_RESIDENT_FUNC_CODE
     ; counting size that out program takes
+    mov bx, offset varsEnd
+    sub bx, offset varsStart
+    add bx, 2
+
     mov dx, offset EndOfProgram     ; size of our programm in bytes
+    add dx, bx
+
     shr dx, 4                       ; system func requires size in paragraphs (each paragraph is 16 bytes)
     inc dx                          ; in case if dx has a remainder when we divide it by 16
+    ;add dx, 100
     int 21h
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+; --------------------------------     DRAWING FRAME       ----------------------------------------------
+
+
+; Loads chosen frame style to CurrentFrameStyle
+; Entry : BX - style index
+; Exit  : None
+decideFrameStyle        proc
+    push cx ; save cx
+
+    mov si, offset FrameStyles
+    mov cx, bx
+    dec cx
+    bruh:   ; ASK:
+        add si, STYLE_STRING_LEN
+        loop bruh
+
+    push di ; save di
+    mov cx, STYLE_STRING_LEN
+    push ds
+    pop  es
+    mov di, offset CurrentFrameStyle
+    rep movsb
+    pop di cx
+
+    ret
+    endp
+
+
+
+; Draws frame of table
+; Entry: None
+; Exit : None
+; Destr: si, ax, bx
+drawFrame   proc
+    mov bx, VIDEO_MEMORY_ADDR
+    mov es, bx ; set memory segment to video memory
+    mov si, offset CurrentFrameStyle
+
+
+
+    mov ah, backgroundColor ; set color attribute
+
+
+    ; draw first line of frame
+    ; mov di, 1 * 2 * SCREEN_WIDTH ; move video memory pointer to the 2th line
+    mov di, 0
+    mov cx, FRAME_WIDTH
+    call drawLine
+    add di, 2 * SCREEN_WIDTH ; move video memory pointer to the next line
+    add si, STYLE_STRING_ONE_ROW_LEN
+
+    mov cx, FRAME_HEIGHT ; hardcoded, frame height
+    dec cx ; cx -= 2, height - 2 (because first and last rows are already considered)
+    dec cx
+    cycleThroughRows:
+        push cx ; save cx
+
+        ; lea si, TableFormat + 3
+        mov cx, FRAME_WIDTH ; TODO: hardcoded, frame width
+        call drawLine
+        add di, 2 * SCREEN_WIDTH ; move video memory pointer to the next line
+
+        pop cx ; restore cx
+        loop cycleThroughRows
+
+    add si, STYLE_STRING_ONE_ROW_LEN
+    ; draw last line of frame
+    mov cx, FRAME_WIDTH
+    call drawLine
+
+    ret
+    endp
+
+; Draws line of code
+; Entry: AH = color attribute
+;        DS:SI = address of style string sequence
+;        ES:DI = address in video memory where to begin drawing line
+;        CX = frame width
+; Require: DF (direction flag) = 0
+; Exit :
+; Destr:
+drawLine    proc
+    push di ; save di
+    push si ; save si
+
+                                ; add di, 2 * 10 ; x coord offset
+                                ; draws first symbol of row
+    lodsb                       ; puts beginning style character to AL
+    mov es:[di], ax             ; saves char with color to video memory
+    add di, 2                   ; move col position
+
+    lodsb                       ; puts middle style character to AL
+    sub cx, 2                   ; number of chars in the middle = width - 2 (first and last characters)
+    cycleThroughCols:
+        mov es:[di], ax         ; save char with color attr to video memory
+        add di, 2               ; move col position
+        loop cycleThroughCols
+
+                                ; draws last symbol of row
+    lodsb                       ; puts ending style character to AL
+    mov es:[di], ax             ; saves char with color to video memory
+    add di, 2                   ; move col position
+
+    pop si                      ; restore si (can be changed to -3 = number of lodsb)
+    pop di                      ; restore di
+    ret
+    endp
+
+; Draws text message
+; Entry: AH = color attribute
+;        DS:SI = address of message string
+;        ES:DI = address in video memory where to begin drawing text
+;        CX = line length
+; Require: DF (direction flag) = 0
+; Exit :
+; Destr:
+drawTextMessage     proc
+    push di                 ; save di
+    push si                 ; save si
+
+    lea si, TextMessage
+    charLoop:
+        lodsb               ; load char from message to al
+
+        mov es:[di], ax     ; save char with color attr to video memory
+        add di, 2           ; move col position
+        loop charLoop
+
+    pop si                  ; restore si
+    pop di                  ; restore di
+    ret
+    endp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+; ---------------------------------         NEW INTERRUPTION FUNCS        ------------------------------------
 
 loadMyKeyboardInterruptorAndSavePrev       proc
     xor ax, ax ; ax = 0
@@ -103,7 +337,6 @@ loadMyTimerInterruptorAndSavePrev       proc
 ; Destr  : CX, BX, DI
 numberToHexStr      proc
     push cx ; save cx
-    ; di += REGISTER_HEX_LEN * 2
     add di, REGISTER_HEX_LEN ; we need to reverse output
     add di, REGISTER_HEX_LEN
     sub di, 2
@@ -137,18 +370,46 @@ numberToHexStr      proc
     endp
 
 myTimerInterruptionFunc     proc
+    push sp bp si bx di ax cx es ds
+    push cs
+    pop  ds
+
     cmp cs:isTableOfRegistersOpen, 1h
     jne doNotOpenTable
         call drawTableOfRegisters
     doNotOpenTable:
 
+    pop ds es cx ax di bx si bp sp
     jmp OldTimerInterruptorFuncAddr
 
     iret
     endp
 
 drawTableOfRegisters        proc
-    push bp si bx di ax cx es
+    ; ASK: pusha, how to? with .286 doesn't work properly
+
+
+
+    cld
+    mov bx, 1
+    call decideFrameStyle
+    mov  backgroundColor, 3Fh
+    call drawFrame
+
+
+    mov cx, 10
+    push VIDEO_MEMORY_ADDR
+    pop  es
+    mov  di, SCREEN_WIDTH * 2 * 5 + 5 * 2
+
+    mov si, offset TextMessage
+    mov ah, CHAR_STYLE
+    call cs:drawTextMessage
+
+
+
+
+
 
     mov ax, VIDEO_MEMORY_ADDR
     mov es, ax
@@ -185,7 +446,6 @@ drawTableOfRegisters        proc
     add di, 2 * SCREEN_WIDTH
     add di, 2
 
-    pop es cx ax di bx si bp
     ret
     endp
 
