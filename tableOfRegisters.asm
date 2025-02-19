@@ -11,7 +11,7 @@ varsStart:
 
 ; -------------------------         VARIABLES       ----------------------------------------
 
-isTableOfRegistersOpen                      db 1
+isTableOfRegistersOpen                      db 0
 ProgrammStartString                         db "Programm has started...", 10, "$"  ; 10 = new line char code
 
 ; frame submodule variables
@@ -57,6 +57,12 @@ STYLE_STRING_LEN                            equ 9
 STYLE_STRING_ONE_ROW_LEN                    equ 3
 FRAME_WIDTH                                 equ 20
 FRAME_HEIGHT                                equ 10
+FRAME_TOP_LEFT_CORN_OFFSET                  equ 0
+
+oldScreenBuffer                             db 2 * FRAME_WIDTH * FRAME_HEIGHT dup(?)
+outputImageBuffer                           db 2 * FRAME_WIDTH * FRAME_HEIGHT dup(?)
+frameImageBuffer                            db 2 * FRAME_WIDTH * FRAME_HEIGHT dup(?)
+
 
 
 .code
@@ -185,7 +191,7 @@ drawFrame   proc
 
     ; draw first line of frame
     ; mov di, 1 * 2 * SCREEN_WIDTH ; move video memory pointer to the 2th line
-    mov di, 0
+    mov di, FRAME_TOP_LEFT_CORN_OFFSET
     mov cx, FRAME_WIDTH
     call drawLine
     add di, 2 * SCREEN_WIDTH ; move video memory pointer to the next line
@@ -385,10 +391,64 @@ myTimerInterruptionFunc     proc
     iret
     endp
 
+
+
+
+saveOldScreen       proc
+    push ds ; save ds
+    push VIDEO_MEMORY_ADDR ds   ; source      segment register (ds) = VIDEO_MEMORY_ADDR 
+    pop  es ds                  ; destination segment register (es) = ds (data segment)
+
+    mov si, FRAME_TOP_LEFT_CORN_OFFSET
+    mov di, offset cs:oldScreenBuffer
+    mov cx, FRAME_WIDTH * FRAME_HEIGHT
+    mov bx, cx
+    sub bx, FRAME_WIDTH     ; when is next time when we go to the next row
+    oldScreenPixelsLoop:
+        cmp bx, cx
+        jne stillOnSameRow
+            sub bx, FRAME_WIDTH
+            add si, 2 * SCREEN_WIDTH ; move to the next screen line
+            sub si, 2 * FRAME_WIDTH
+        stillOnSameRow:
+
+        movsw   ; moves one byte from ds:si to es:di
+        loop oldScreenPixelsLoop
+
+    pop ds
+    endp
+    ret
+
+
+restoreOldScreen       proc
+    push VIDEO_MEMORY_ADDR  ; source      segment register (es) = ds (data segment)
+    pop  es                 ; destination segment register (es) = VIDEO_MEMORY_ADDR 
+
+    mov di, FRAME_TOP_LEFT_CORN_OFFSET
+    mov si, offset cs:oldScreenBuffer
+    mov cx, FRAME_WIDTH * FRAME_HEIGHT
+    mov bx, cx
+    sub bx, FRAME_WIDTH     ; when is next time when we go to the next row
+    newScreenPixelsLoop:
+        cmp bx, cx
+        jne stillOnSameRowNewScreen
+            sub bx, FRAME_WIDTH
+            add di, 2 * SCREEN_WIDTH ; move to the next screen line
+            sub di, 2 * FRAME_WIDTH
+        stillOnSameRowNewScreen:
+
+        movsw
+        loop newScreenPixelsLoop
+
+    endp
+    ret
+
+
+
 drawTableOfRegisters        proc
     ; ASK: pusha, how to? with .286 doesn't work properly
 
-
+    ; call saveOldScreen
 
     cld
     mov bx, 1
@@ -450,7 +510,9 @@ drawTableOfRegisters        proc
     endp
 
 drawScanCodeOfPressedKey        proc
-    push ax di es
+    push ax di es ds si bx cx
+    push cs
+    pop  ds
 
     mov ax, VIDEO_MEMORY_ADDR
     mov es, ax
@@ -462,8 +524,17 @@ drawScanCodeOfPressedKey        proc
     stosw
 
 
+    cli
     cmp al, ACTIVATION_CODE
     jne notActivationCode
+        cmp cs:isTableOfRegistersOpen, 1h
+        jne openTableOfRegisters
+            call restoreOldScreen
+            jmp endOpenDecisionIf
+        openTableOfRegisters:
+            call saveOldScreen
+        endOpenDecisionIf:
+
         xor cs:isTableOfRegistersOpen, 1h   ; change state of visibility table
         in  al,  61h
         mov ah,  al  ; save previous val
@@ -474,7 +545,8 @@ drawScanCodeOfPressedKey        proc
 
         mov al, END_OF_INTERRUPT_CODE
         out INTERRUPTION_CONTROLLER_PORT, al
-        pop es di ax
+
+        pop cx bx si ds es di ax
         iret
 
     notActivationCode:
@@ -490,19 +562,12 @@ drawScanCodeOfPressedKey        proc
     mov al, END_OF_INTERRUPT_CODE
     out INTERRUPTION_CONTROLLER_PORT, al
 
-    pop es di ax
+    pop cx bx si ds es di ax
     jmp OldKeyboardInterrupFuncAddr
 
     iret         ; special return for interruptions, stores not only registers,
                  ; but also flags and command segments
     endp
-
-
-; openWindow:
-;     ACTIVATION_CODE
-;
-;     iret
-;     endp
 
 
 
