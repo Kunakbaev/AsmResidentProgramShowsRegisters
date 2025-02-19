@@ -179,22 +179,16 @@ decideFrameStyle        proc
 ; Entry: None
 ; Exit : None
 ; Destr: si, ax, bx
-drawFrame   proc
-    mov bx, VIDEO_MEMORY_ADDR
-    mov es, bx ; set memory segment to video memory
+loadFrame2FrameImageBuffer   proc
     mov si, offset CurrentFrameStyle
 
 
 
     mov ah, backgroundColor ; set color attribute
 
-
-    ; draw first line of frame
-    ; mov di, 1 * 2 * SCREEN_WIDTH ; move video memory pointer to the 2th line
-    mov di, FRAME_TOP_LEFT_CORN_OFFSET
+    ; save first line of frame
     mov cx, FRAME_WIDTH
-    call drawLine
-    add di, 2 * SCREEN_WIDTH ; move video memory pointer to the next line
+    call loadFrameRow2FrameImageBuffer
     add si, STYLE_STRING_ONE_ROW_LEN
 
     mov cx, FRAME_HEIGHT ; hardcoded, frame height
@@ -203,44 +197,40 @@ drawFrame   proc
     cycleThroughRows:
         push cx ; save cx
 
-        ; lea si, TableFormat + 3
-        mov cx, FRAME_WIDTH ; TODO: hardcoded, frame width
-        call drawLine
-        add di, 2 * SCREEN_WIDTH ; move video memory pointer to the next line
+        mov cx, FRAME_WIDTH
+        call loadFrameRow2FrameImageBuffer
 
         pop cx ; restore cx
         loop cycleThroughRows
 
     add si, STYLE_STRING_ONE_ROW_LEN
-    ; draw last line of frame
+    ; save last line of frame
     mov cx, FRAME_WIDTH
-    call drawLine
+    call loadFrameRow2FrameImageBuffer
 
     ret
     endp
 
 ; Draws line of code
 ; Entry: AH = color attribute
-;        DS:SI = address of style string sequence
-;        ES:DI = address in video memory where to begin drawing line
-;        CX = frame width
+;        DS:SI = style string
+;        ES:DI = where to save string
 ; Require: DF (direction flag) = 0
 ; Exit :
 ; Destr:
-drawLine    proc
-    push di ; save di
+loadFrameRow2FrameImageBuffer    proc
     push si ; save si
 
                                 ; add di, 2 * 10 ; x coord offset
                                 ; draws first symbol of row
     lodsb                       ; puts beginning style character to AL
-    mov es:[di], ax             ; saves char with color to video memory
+    mov es:[di], ax                ; saves char with color to frame image buffer
     add di, 2                   ; move col position
 
     lodsb                       ; puts middle style character to AL
     sub cx, 2                   ; number of chars in the middle = width - 2 (first and last characters)
     cycleThroughCols:
-        mov es:[di], ax         ; save char with color attr to video memory
+        mov es:[di], ax            ; save char with color attr to video memory
         add di, 2               ; move col position
         loop cycleThroughCols
 
@@ -250,19 +240,18 @@ drawLine    proc
     add di, 2                   ; move col position
 
     pop si                      ; restore si (can be changed to -3 = number of lodsb)
-    pop di                      ; restore di
     ret
     endp
 
 ; Draws text message
 ; Entry: AH = color attribute
 ;        DS:SI = address of message string
-;        ES:DI = address in video memory where to begin drawing text
+;        ES:DI = address in frame image buffer where to start drawing message
 ;        CX = line length
 ; Require: DF (direction flag) = 0
 ; Exit :
 ; Destr:
-drawTextMessage     proc
+addTextMessageToFrameImageBuffer     proc
     push di                 ; save di
     push si                 ; save si
 
@@ -270,7 +259,7 @@ drawTextMessage     proc
     charLoop:
         lodsb               ; load char from message to al
 
-        mov es:[di], ax     ; save char with color attr to video memory
+        mov es:[di], ax     ; save char with color attr to frame image buffer
         add di, 2           ; move col position
         loop charLoop
 
@@ -419,13 +408,16 @@ saveOldScreen       proc
     endp
     ret
 
-
-restoreOldScreen       proc
+; loads words (High = color, Low = char) from buffer (FRAME_WIDTH x FRAME_HEIGHT)
+; to screen (video memory) from address FRAME_TOP_LEFT_CORN_OFFSET
+; Entry : SI = offset (memory address) of buffer
+; Exit  :
+; Destr : 
+loadImageToScreenFromBuffer     proc
     push VIDEO_MEMORY_ADDR  ; source      segment register (es) = ds (data segment)
     pop  es                 ; destination segment register (es) = VIDEO_MEMORY_ADDR 
 
     mov di, FRAME_TOP_LEFT_CORN_OFFSET
-    mov si, offset cs:oldScreenBuffer
     mov cx, FRAME_WIDTH * FRAME_HEIGHT
     mov bx, cx
     sub bx, FRAME_WIDTH     ; when is next time when we go to the next row
@@ -443,32 +435,49 @@ restoreOldScreen       proc
     endp
     ret
 
+restoreOldScreen       proc
+    mov si, offset oldScreenBuffer
+    call loadImageToScreenFromBuffer
 
+    endp
+    ret
+
+prepareFrameImageBuffer     proc
+    mov bx, 1
+    call decideFrameStyle
+    mov  backgroundColor, 3Fh
+    push ds
+    pop  es
+    mov  di, offset frameImageBuffer
+    call loadFrame2FrameImageBuffer
+
+    mov  si, offset TextMessage
+    mov  ah, CHAR_STYLE
+    push cs
+    pop  es
+    mov  di, offset frameImageBuffer
+    add  di, 2 * (2 * FRAME_WIDTH + 4)
+    mov  cx, 10
+    call cs:addTextMessageToFrameImageBuffer
+
+    ret
+    endp
+
+; ASK: 3 copypaste functions (this one, saveScreen, loadScreen)?
+drawFrameImageBuffer        proc
+    mov si, offset frameImageBuffer
+    call loadImageToScreenFromBuffer
+
+    ret
+    endp
 
 drawTableOfRegisters        proc
     ; ASK: pusha, how to? with .286 doesn't work properly
 
     ; call saveOldScreen
 
-    cld
-    mov bx, 1
-    call decideFrameStyle
-    mov  backgroundColor, 3Fh
-    call drawFrame
-
-
-    mov cx, 10
-    push VIDEO_MEMORY_ADDR
-    pop  es
-    mov  di, SCREEN_WIDTH * 2 * 5 + 5 * 2
-
-    mov si, offset TextMessage
-    mov ah, CHAR_STYLE
-    call cs:drawTextMessage
-
-
-
-
+    call prepareFrameImageBuffer
+    call drawFrameImageBuffer
 
 
     mov ax, VIDEO_MEMORY_ADDR
