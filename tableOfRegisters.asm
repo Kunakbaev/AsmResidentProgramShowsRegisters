@@ -23,7 +23,7 @@ FrameStyles                 db 201, 205, 187, 186, 32, 186, 200, 205, 188 ; doub
                             db '123456789'                                ; for debug purposes
                             db '#-#| |#-#'
 CurrentFrameStyle           db '#-#| |#-#'
-TextMessage                 db "I am so stupid and dumb. That's why I love a dump." ; message that is shown in the middle of table
+TextMessage                 db "Table of regs" ; message that is shown in the middle of table
 backgroundColor             db 1 dup(?)                                             ; Is it ok to store just one byte in memory?
 ; ASK: cringe?
 AxRegTableName              db "AX:"
@@ -37,7 +37,7 @@ DxRegTableName              db "DX:"
 
 VIDEO_MEMORY_ADDR                           equ 0b800h
 SCREEN_WIDTH                                equ 80
-CHAR_STYLE                                  equ 4Eh
+CHAR_STYLE                                  equ 3Fh
 KEYBOARD_PORT                               equ 60h
 ESC_ASCII_CODE                              equ 1
 INTERRUPTION_CONTROLLER_PORT                equ 20h
@@ -48,6 +48,9 @@ TERMINATE_AND_STAY_RESIDENT_FUNC_CODE       equ 3100h
 JMP_COMMAND_CODE                            equ 0eah
 TIMER_INT_CODE                              equ 08h
 KEYBOARD_INT_CODE                           equ 09h
+SPACING_BETWEEN_REG_NAME_AND_VAL            equ 7
+REG_NAME_STRING_LEN                         equ 3
+TEXT_MESSAGE_LEN                            equ 13
 
 ; frame submodule consts
 COMMAND_LINE_MEMORY_ADDR                    equ 80h
@@ -124,6 +127,7 @@ Start:
     mov bx, offset varsEnd
     sub bx, offset varsStart
     add bx, 2
+    add bx, 2000
 
     mov dx, offset EndOfProgram     ; size of our programm in bytes
     add dx, bx
@@ -252,10 +256,9 @@ loadFrameRow2FrameImageBuffer    proc
 ; Exit :
 ; Destr:
 addTextMessageToFrameImageBuffer     proc
-    push di                 ; save di
+    ; push di                 ; save di
     push si                 ; save si
 
-    lea si, TextMessage
     charLoop:
         lodsb               ; load char from message to al
 
@@ -264,7 +267,7 @@ addTextMessageToFrameImageBuffer     proc
         loop charLoop
 
     pop si                  ; restore si
-    pop di                  ; restore di
+    ; pop di                  ; restore di
     ret
     endp
 
@@ -365,7 +368,7 @@ numberToHexStr      proc
     endp
 
 myTimerInterruptionFunc     proc
-    push sp bp si bx di ax cx es ds
+    push ax bx cx dx si di sp bp es ds
     push cs
     pop  ds
 
@@ -374,7 +377,7 @@ myTimerInterruptionFunc     proc
         call drawTableOfRegisters
     doNotOpenTable:
 
-    pop ds es cx ax di bx si bp sp
+    pop  ds es bp sp di si dx cx bx ax
     jmp OldTimerInterruptorFuncAddr
 
     iret
@@ -401,7 +404,7 @@ saveOldScreen       proc
             sub si, 2 * FRAME_WIDTH
         stillOnSameRow:
 
-        movsw   ; moves one byte from ds:si to es:di
+        movsw   ; moves one word from ds:si to es:di
         loop oldScreenPixelsLoop
 
     pop ds
@@ -456,17 +459,119 @@ prepareFrameImageBuffer     proc
     push cs
     pop  es
     mov  di, offset frameImageBuffer
-    add  di, 2 * (2 * FRAME_WIDTH + 4)
-    mov  cx, 10
+    add  di, 2 * (2 * FRAME_WIDTH + 3)
+    mov  cx, TEXT_MESSAGE_LEN
     call cs:addTextMessageToFrameImageBuffer
 
     ret
     endp
 
-; ASK: 3 copypaste functions (this one, saveScreen, loadScreen)?
 drawFrameImageBuffer        proc
     mov si, offset frameImageBuffer
     call loadImageToScreenFromBuffer
+
+    ret
+    endp
+
+; updates oldScreenBuffer, loads new screen bytes to it, where our image was overwritten
+; i.e. screen word != frameImageBuffer word
+; es:[di] - frameImageBuffer, ds:[si] - video memory
+; Entry : DI = offset (memory address) of frameImageBuffere
+; Exit  :
+; Destr : 
+updateOldScreenBuffer       proc
+    push ds                     ; save ds
+    push ds VIDEO_MEMORY_ADDR   ; source      segment register (ds) = VIDEO_MEMORY_ADDR
+    pop  ds es                  ; destination segment register (es) = data segment (ds)
+
+    mov si, FRAME_TOP_LEFT_CORN_OFFSET
+    mov di, offset cs:frameImageBuffer
+    mov cx, FRAME_WIDTH * FRAME_HEIGHT
+    mov bx, cx
+    sub bx, FRAME_WIDTH     ; when is next time when we go to the next row
+    oldScreenUpdPixelsLoop:
+        cmp bx, cx
+        jne stillOnSameRowOldScreenUpd
+            sub bx, FRAME_WIDTH
+            add si, 2 * SCREEN_WIDTH ; move to the next screen line
+            sub si, 2 * FRAME_WIDTH
+        stillOnSameRowOldScreenUpd:
+
+        cmpsw
+        je noUpdateNeeded
+            push di ; save frameImageBuffer
+            sub si, 2
+
+            push bx
+            mov bx, di
+            sub bx, offset cs:frameImageBuffer
+            sub bx, 2
+            mov di, offset cs:oldScreenBuffer
+            add di, bx
+
+            movsw
+            pop bx
+            pop di ; restore frameImageBuffer
+        noUpdateNeeded:
+
+        loop oldScreenUpdPixelsLoop
+
+    pop ds ; restore ds
+    ret
+    endp
+
+; Entry : BX - stack offset of word in stack
+;         DS:SI - message before reg value (all have same len = 3)
+;         ES:DI - where to drawing output in video memory
+; Exit  :
+; Destr :
+drawOneRegInfo      proc
+    push di ; save di
+
+    push bx
+    mov  ah, CHAR_STYLE
+    push cs
+    pop  es
+    mov  cx, REG_NAME_STRING_LEN
+    call addTextMessageToFrameImageBuffer
+    add  di, SPACING_BETWEEN_REG_NAME_AND_VAL * 2
+    pop  bx
+
+    mov bp, sp
+    add bp, bx
+    mov bx, [bp]    ; ax
+    call numberToHexStr
+    add di, 2 * FRAME_WIDTH
+    add di, 2
+
+    pop di ; restore di
+    add di, 2 * FRAME_WIDTH ; go the next line
+
+    ret
+    endp
+
+addRegsInfoToFrameImageBuffer       proc
+    push cs
+    pop  es
+    mov ah, CHAR_STYLE
+    mov di, offset cs:frameImageBuffer
+    add di, (4 * FRAME_WIDTH + 3) * 2
+
+    mov si, offset AxRegTableName
+    mov bx, 26
+    call drawOneRegInfo
+
+    mov si, offset BxRegTableName
+    mov bx, 24
+    call drawOneRegInfo
+
+    mov si, offset CxRegTableName
+    mov bx, 22
+    call drawOneRegInfo
+
+    mov si, offset DxRegTableName
+    mov bx, 20
+    call drawOneRegInfo
 
     ret
     endp
@@ -476,44 +581,16 @@ drawTableOfRegisters        proc
 
     ; call saveOldScreen
 
+    ; FIXME: frameImageBuffer is almost constant
+    ; there is no need to call loadFrame func every time
+    ; because frame position is constant, only text changes
+    ; so there's need to only change those position in buffer, where text lies
+    cld
+    call updateOldScreenBuffer
     call prepareFrameImageBuffer
+    call addRegsInfoToFrameImageBuffer
     call drawFrameImageBuffer
 
-
-    mov ax, VIDEO_MEMORY_ADDR
-    mov es, ax
-    mov ah, CHAR_STYLE
-    mov di, 5 * SCREEN_WIDTH * 2 + 15 * 2
-
-    mov bp, sp
-    mov bx, [bp]    ; es
-    call numberToHexStr
-    add di, 2 * SCREEN_WIDTH
-    add di, 2
-
-    mov bp, sp
-    mov bx, [bp + 2]    ; cx
-    call numberToHexStr
-    add di, 2 * SCREEN_WIDTH
-    add di, 2
-
-    mov bp, sp
-    mov bx, [bp + 4]    ; ax
-    call numberToHexStr
-    add di, 2 * SCREEN_WIDTH
-    add di, 2
-
-    mov bp, sp
-    mov bx, [bp + 6]    ; di
-    call numberToHexStr
-    add di, 2 * SCREEN_WIDTH
-    add di, 2
-
-    mov bp, sp
-    mov bx, [bp + 8]    ; bx
-    call numberToHexStr
-    add di, 2 * SCREEN_WIDTH
-    add di, 2
 
     ret
     endp
@@ -523,14 +600,14 @@ drawScanCodeOfPressedKey        proc
     push cs
     pop  ds
 
-    mov ax, VIDEO_MEMORY_ADDR
-    mov es, ax
-    mov ah, CHAR_STYLE
-    mov di, 5 * SCREEN_WIDTH * 2 + 10 * 2
+    ; mov ax, VIDEO_MEMORY_ADDR
+    ; mov es, ax
+    ; mov ah, CHAR_STYLE
+    ; mov di, 5 * SCREEN_WIDTH * 2 + 10 * 2
     cld
 
     in al, KEYBOARD_PORT
-    stosw
+    ; stosw
 
 
     cli
