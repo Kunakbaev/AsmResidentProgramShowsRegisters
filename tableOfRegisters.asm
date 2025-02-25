@@ -26,10 +26,8 @@ CurrentFrameStyle           db '#-#| |#-#'
 TextMessage                 db "Table of regs" ; message that is shown in the middle of table
 backgroundColor             db 1 dup(?)                                             ; Is it ok to store just one byte in memory?
 ; ASK: cringe?
-AxRegTableName              db "AX:"
-BxRegTableName              db "BX:"
-CxRegTableName              db "CX:"
-DxRegTableName              db "DX:"
+; ax bx cx dx si di sp bp es ds
+regsNames                   db "AX:BX:CX:DX:SI:DI:SP:BP:ES:DS:CS:IP:"
 
 
 
@@ -48,9 +46,11 @@ TERMINATE_AND_STAY_RESIDENT_FUNC_CODE       equ 3100h
 JMP_COMMAND_CODE                            equ 0eah
 TIMER_INT_CODE                              equ 08h
 KEYBOARD_INT_CODE                           equ 09h
-SPACING_BETWEEN_REG_NAME_AND_VAL            equ 7
+SPACING_BETWEEN_REG_NAME_AND_VAL            equ 2
 REG_NAME_STRING_LEN                         equ 3
 TEXT_MESSAGE_LEN                            equ 13
+FIRST_REG_IN_STACK_OFFSET                   equ 30
+NUM_OF_REGS_TO_DRAW                         equ 12
 
 ; frame submodule consts
 COMMAND_LINE_MEMORY_ADDR                    equ 80h
@@ -58,8 +58,8 @@ TEXT_MESSAGE_COLOR_ATTR                     equ 3Fh
 SCREEN_WIDTH                                equ 80
 STYLE_STRING_LEN                            equ 9
 STYLE_STRING_ONE_ROW_LEN                    equ 3
-FRAME_WIDTH                                 equ 20
-FRAME_HEIGHT                                equ 10
+FRAME_WIDTH                                 equ 23
+FRAME_HEIGHT                                equ 11
 FRAME_TOP_LEFT_CORN_OFFSET                  equ 0
 
 oldScreenBuffer                             db 2 * FRAME_WIDTH * FRAME_HEIGHT dup(?)
@@ -127,7 +127,7 @@ Start:
     mov bx, offset varsEnd
     sub bx, offset varsStart
     add bx, 2
-    add bx, 2000
+    add bx, 5000                    ; ASK: how to allocate proper amount of memory for local variables?
 
     mov dx, offset EndOfProgram     ; size of our programm in bytes
     add dx, bx
@@ -368,6 +368,7 @@ numberToHexStr      proc
     endp
 
 myTimerInterruptionFunc     proc
+    ; save all registers that we use during our program
     push ax bx cx dx si di sp bp es ds
     push cs
     pop  ds
@@ -377,6 +378,7 @@ myTimerInterruptionFunc     proc
         call drawTableOfRegisters
     doNotOpenTable:
 
+    ; restore all used registers to their original value
     pop  ds es bp sp di si dx cx bx ax
     jmp OldTimerInterruptorFuncAddr
 
@@ -388,14 +390,14 @@ myTimerInterruptionFunc     proc
 
 saveOldScreen       proc
     push ds ; save ds
-    push VIDEO_MEMORY_ADDR ds   ; source      segment register (ds) = VIDEO_MEMORY_ADDR 
+    push VIDEO_MEMORY_ADDR ds   ; source      segment register (ds) = VIDEO_MEMORY_ADDR
     pop  es ds                  ; destination segment register (es) = ds (data segment)
 
     mov si, FRAME_TOP_LEFT_CORN_OFFSET
     mov di, offset cs:oldScreenBuffer
     mov cx, FRAME_WIDTH * FRAME_HEIGHT
     mov bx, cx
-    sub bx, FRAME_WIDTH     ; when is next time when we go to the next row
+    sub bx, FRAME_WIDTH             ; when is next time when we go to the next row
     oldScreenPixelsLoop:
         cmp bx, cx
         jne stillOnSameRow
@@ -415,10 +417,10 @@ saveOldScreen       proc
 ; to screen (video memory) from address FRAME_TOP_LEFT_CORN_OFFSET
 ; Entry : SI = offset (memory address) of buffer
 ; Exit  :
-; Destr : 
+; Destr :
 loadImageToScreenFromBuffer     proc
     push VIDEO_MEMORY_ADDR  ; source      segment register (es) = ds (data segment)
-    pop  es                 ; destination segment register (es) = VIDEO_MEMORY_ADDR 
+    pop  es                 ; destination segment register (es) = VIDEO_MEMORY_ADDR
 
     mov di, FRAME_TOP_LEFT_CORN_OFFSET
     mov cx, FRAME_WIDTH * FRAME_HEIGHT
@@ -445,6 +447,7 @@ restoreOldScreen       proc
     endp
     ret
 
+; loads frame and text message to frame image buffer
 prepareFrameImageBuffer     proc
     mov bx, 1
     call decideFrameStyle
@@ -452,16 +455,17 @@ prepareFrameImageBuffer     proc
     push ds
     pop  es
     mov  di, offset frameImageBuffer
-    call loadFrame2FrameImageBuffer
+    call loadFrame2FrameImageBuffer             ; load frame to buffer
 
-    mov  si, offset TextMessage
+    mov  si, offset TextMessage                 ; load frame title message
     mov  ah, CHAR_STYLE
     push cs
     pop  es
     mov  di, offset frameImageBuffer
-    add  di, 2 * (2 * FRAME_WIDTH + 3)
+    add  di, 2 * (1 * FRAME_WIDTH + 5)          ; alternative position (counts from top left corner of frame)
+                                                ; where message will be put
     mov  cx, TEXT_MESSAGE_LEN
-    call cs:addTextMessageToFrameImageBuffer
+    call cs:addTextMessageToFrameImageBuffer    ; load text to buffer
 
     ret
     endp
@@ -478,7 +482,7 @@ drawFrameImageBuffer        proc
 ; es:[di] - frameImageBuffer, ds:[si] - video memory
 ; Entry : DI = offset (memory address) of frameImageBuffere
 ; Exit  :
-; Destr : 
+; Destr :
 updateOldScreenBuffer       proc
     push ds                     ; save ds
     push ds VIDEO_MEMORY_ADDR   ; source      segment register (ds) = VIDEO_MEMORY_ADDR
@@ -491,14 +495,15 @@ updateOldScreenBuffer       proc
     sub bx, FRAME_WIDTH     ; when is next time when we go to the next row
     oldScreenUpdPixelsLoop:
         cmp bx, cx
-        jne stillOnSameRowOldScreenUpd
+        jne stillOnSameRowOldScreenUpd ; move video memory pointer to next line
+                                       ; in case if we moved to the next line in frame image buffer
             sub bx, FRAME_WIDTH
             add si, 2 * SCREEN_WIDTH ; move to the next screen line
             sub si, 2 * FRAME_WIDTH
         stillOnSameRowOldScreenUpd:
 
         cmpsw
-        je noUpdateNeeded
+        je noUpdateNeeded   ; update oldScreenBuffer in case if something has overwritten our frame
             push di ; save frameImageBuffer
             sub si, 2
 
@@ -520,14 +525,17 @@ updateOldScreenBuffer       proc
     ret
     endp
 
+; Draws info about one particular register
 ; Entry : BX - stack offset of word in stack
 ;         DS:SI - message before reg value (all have same len = 3)
 ;         ES:DI - where to drawing output in video memory
 ; Exit  :
 ; Destr :
 drawOneRegInfo      proc
-    push di ; save di
+    push di cx bx ; save di and cx
+    ; sub bx, 3 * 2 ; we don't want to count those vars that we just pushed
 
+    ; add register name to frame image buffer
     push bx
     mov  ah, CHAR_STYLE
     push cs
@@ -539,12 +547,12 @@ drawOneRegInfo      proc
 
     mov bp, sp
     add bp, bx
-    mov bx, [bp]    ; ax
-    call numberToHexStr
-    add di, 2 * FRAME_WIDTH
-    add di, 2
+    mov bx, [bp]            ; get register value from stack
+    call numberToHexStr     ; transform int to hex string and store it to frame image buffer
+    ; add di, 2 * FRAME_WIDTH
+    ; add di, 2
 
-    pop di ; restore di
+    pop bx cx di ; restore di and cx
     add di, 2 * FRAME_WIDTH ; go the next line
 
     ret
@@ -555,23 +563,26 @@ addRegsInfoToFrameImageBuffer       proc
     pop  es
     mov ah, CHAR_STYLE
     mov di, offset cs:frameImageBuffer
-    add di, (4 * FRAME_WIDTH + 3) * 2
+    add di, (3 * FRAME_WIDTH + 2) * 2
 
-    mov si, offset AxRegTableName
-    mov bx, 26
-    call drawOneRegInfo
+    mov si, offset cs:regsNames
+    mov cx, NUM_OF_REGS_TO_DRAW
+    mov bx, FIRST_REG_IN_STACK_OFFSET
+    regsDrawCycle:
+        push bx
+        mov  bx, NUM_OF_REGS_TO_DRAW
+        shr  bx, 1
+        cmp  cx, bx
+        jne  sameColumn
+            mov di, offset cs:frameImageBuffer
+            add di, (3 * FRAME_WIDTH + 12) * 2
+        sameColumn:
+        pop  bx
 
-    mov si, offset BxRegTableName
-    mov bx, 24
-    call drawOneRegInfo
-
-    mov si, offset CxRegTableName
-    mov bx, 22
-    call drawOneRegInfo
-
-    mov si, offset DxRegTableName
-    mov bx, 20
-    call drawOneRegInfo
+        call drawOneRegInfo
+        add si, REG_NAME_STRING_LEN
+        sub bx, 2
+        loop regsDrawCycle
 
     ret
     endp

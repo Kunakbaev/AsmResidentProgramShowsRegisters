@@ -9,10 +9,16 @@ org 100h
 Start:
     mov bx, 5555h
     mov es, bx
+    ; mov bx,
+    ; mov sp, bx
+    ; mov bx, acedh
+    ; mov ds, bx
 
     mov ax, 1111h
     mov bx, 2222h
-    mov di, 4444h
+    mov dx, 4444h
+    mov si, 6666h
+    mov di, 7777h
 
     mov cx, 3333h
     workTillEsc:
